@@ -1,0 +1,31 @@
+# Core backtesting/execution
+backtrader==1.9.78.123
+pandas==2.2.2
+numpy==1.26.4
+scipy==1.11.4
+pytz==2024.1
+
+# Technical indicators
+pandas-ta==0.3.14b0
+ta==0.11.0
+
+# Metrics & evaluation
+quantstats==0.0.62
+empyrical==0.5.5
+
+# Modeling / stats (optional but recommended)
+scikit-learn==1.4.2
+xgboost==2.0.3
+statsmodels==0.14.2
+hmmlearn==0.3.2
+
+# YAML config
+PyYAML==6.0.1
+
+# Plotting / notebooks (optional)
+matplotlib==3.8.4
+jupyterlab==4.2.1
+
+# Data sources
+ccxt==4.3.98
+yfinance==0.2.43
