@@ -8,14 +8,14 @@ fastapi==0.115.0
 uvicorn==0.30.6
 
 # Technical indicators
-pandas-ta==0.3.14b0
+pandas-ta @ git+https://github.com/twopirllc/pandas-ta@0.3.14b0
 ta==0.11.0
 
 # Metrics & evaluation
 quantstats==0.0.62
 empyrical==0.5.5
 
-# Modeling / stats (optional but recommended)
+# Modeling / stats
 scikit-learn==1.4.2
 xgboost==2.0.3
 statsmodels==0.14.2
@@ -24,7 +24,7 @@ hmmlearn==0.3.2
 # YAML config
 PyYAML==6.0.1
 
-# Plotting / notebooks (optional)
+# Plotting / notebooks
 matplotlib==3.8.4
 jupyterlab==4.2.1
 
