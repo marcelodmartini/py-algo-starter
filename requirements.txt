@@ -8,7 +8,7 @@ fastapi==0.115.0
 uvicorn==0.30.6
 
 # Technical indicators
-pandas-ta @ git+https://github.com/twopirllc/pandas-ta@0.3.14b0
+pandas-ta @ https://github.com/twopirllc/pandas-ta/archive/refs/tags/0.3.14b0.zip
 ta==0.11.0
 
 # Metrics & evaluation
