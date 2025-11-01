@@ -4,7 +4,6 @@ pandas==2.2.2
 numpy==1.26.4
 scipy==1.11.4
 pytz==2024.1
-python-3.11.9
 fastapi==0.115.0
 uvicorn==0.30.6
 
@@ -32,3 +31,5 @@ jupyterlab==4.2.1
 # Data sources
 ccxt==4.3.98
 yfinance==0.2.43
+
+--prefer-binary
