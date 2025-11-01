@@ -1,25 +1,24 @@
 # Global configuration for the algo starter
 data:
-
   # --- Optional auto-fetch (set auto_fetch: true and fill fields below) ---
-  auto_fetch: false
-  source: "crypto"          # "crypto" (ccxt) or "yahoo" (yfinance)
-  symbol: "BTC/USDT"        # e.g., BTC/USDT (crypto) or SPY (yahoo)
-  exchange: "binance"       # only for crypto
-  interval: "1h"            # only for yahoo (e.g., 1m/5m/15m/1h/1d)
-  start: null               # e.g., "2022-01-01"
+  auto_fetch: true
+  source: "crypto" # "crypto" (ccxt) or "yahoo" (yfinance)
+  symbol: "BTC/USDT" # e.g., BTC/USDT (crypto) or SPY (yahoo)
+  exchange: "binance" # only for crypto
+  interval: "1h" # only for yahoo (e.g., 1m/5m/15m/1h/1d)
+  start: "2025-11-01" # e.g., "2022-01-01"
   end: null
-  limit: 5000               # crypto: max bars
-  csv_path: "data/TEST_1h.csv"   # path to your OHLCV CSV
+  limit: 5000 # crypto: max bars
+  csv_path: "data/TEST_1h.csv" # path to your OHLCV CSV
   datetime_col: "datetime"
   tz: "UTC"
-  timeframe: "1H"                # 1min/5min/15min/1H/1D
+  timeframe: "1H" # 1min/5min/15min/1H/1D
 
 backtest:
   cash: 100000
-  commission: 0.0005            # 5 bps per trade
-  slippage_bps: 2               # model 2 bps slippage per trade side
-  stake_pct: 0.98               # allocate up to 98% of cash
+  commission: 0.0005 # 5 bps per trade
+  slippage_bps: 2 # model 2 bps slippage per trade side
+  stake_pct: 0.98 # allocate up to 98% of cash
   printlog: false
 
 features:
@@ -90,7 +89,7 @@ features:
     autocorr_lags: [1, 2, 5]
     returns: true
     percentile_range: [20]
-    hmm_regimes: 0     # 0 to disable, else number of regimes (2 or 3)
+    hmm_regimes: 0 # 0 to disable, else number of regimes (2 or 3)
 
 signals:
   # Example entry/exit scoring weights (sum can be != 1; we normalize)
@@ -103,17 +102,17 @@ signals:
     stats_ml: 0.05
   thresholds:
     long_min_score: 0.65
-    exit_score: 0.40   # if score drops below, consider exit
+    exit_score: 0.40 # if score drops below, consider exit
 
 risk:
-  atr_stop_mult: 2.0       # initial stop: entry - 2*ATR
-  atr_trail_mult: 2.5      # trailing based on ATR
-  time_stop_bars: 80       # exit if not progressed after N bars
+  atr_stop_mult: 2.0 # initial stop: entry - 2*ATR
+  atr_trail_mult: 2.5 # trailing based on ATR
+  time_stop_bars: 80 # exit if not progressed after N bars
   partial_tp:
     enabled: true
-    tp1_rr: 1.5            # take 50% at 1.5R
+    tp1_rr: 1.5 # take 50% at 1.5R
     tp1_pct: 0.50
-  kill_switch_dd_month: -0.08  # stop trading for the month if DD < -8%
+  kill_switch_dd_month: -0.08 # stop trading for the month if DD < -8%
 
 walk_forward:
   train_bars: 5000

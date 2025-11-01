@@ -4,6 +4,9 @@ pandas==2.2.2
 numpy==1.26.4
 scipy==1.11.4
 pytz==2024.1
+python-3.11.9
+fastapi==0.115.0
+uvicorn==0.30.6
 
 # Technical indicators
 pandas-ta==0.3.14b0
