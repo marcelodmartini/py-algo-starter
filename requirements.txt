@@ -1,0 +1,9 @@
+pandas==2.2.2
+numpy==1.26.4
+backtrader==1.9.78.123
+quantstats==0.0.62
+requests>=2.31.0
+yfinance>=0.2.43
+ccxt>=4.3.90
+ta>=0.11.0
+statsmodels>=0.14.2
