@@ -5,19 +5,31 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "py-algo-starter"
 version = "0.1.0"
-description = "Algo backtesting starter with QuantStats report + Render cron integration"
+description = "Starter de backtesting con fetch, señales e informe QuantStats"
 readme = "README.md"
-license = {text = "MIT"}
 requires-python = ">=3.11"
-authors = [{name="Marcelo Martini"}]
+license = { text = "MIT" }  # evita el warning de licencia
+authors = [{ name = "Marcelo Martini" }]
+
 dependencies = [
-    "pandas==2.2.2",
-    "numpy==1.26.4",
-    "backtrader==1.9.78.123",
-    "quantstats==0.0.62",
-    "requests>=2.31.0",
-    "yfinance>=0.2.43",
-    "ccxt>=4.3.90",
-    "ta>=0.11.0",
-    "statsmodels>=0.14.2",
+  "backtrader==1.9.78.123",
+  "quantstats==0.0.62",
+  "pandas==2.2.2",
+  "numpy==1.26.4",
+  "requests>=2.31.0",
+  "pytz>=2024.1",
+  "yfinance==0.2.43",
+  "ta==0.11.0",
 ]
+
+[tool.setuptools]
+# Evita que setuptools agarre directorios de más
+packages = { find = { include = ["py_algo_starter*"], exclude = ["data*", "notebooks*", "reports*", "assets*"] } }
+
+[tool.setuptools.package-data]
+# si tenés archivos estáticos dentro del paquete (p. ej. plantillas)
+py_algo_starter = ["**/*.txt", "**/*.json", "**/*.csv", "**/*.yaml", "**/*.yml"]
+
+[project.scripts]
+# opcional: entry point CLI
+py-algo-run = "py_algo_starter.run_backtest:main"
