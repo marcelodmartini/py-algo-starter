@@ -1,9 +1,10 @@
+# src/run_backtest.py
 import argparse
 import os
+from pathlib import Path
 import pandas as pd
 import backtrader as bt
 import quantstats as qs
-from pathlib import Path
 import requests
 
 from utils import load_config, read_csv, resample_ohlcv, add_pct_change
@@ -32,37 +33,43 @@ class PandasDataExt(bt.feeds.PandasData):
     )
 
 
-def upload_report(report_path: str, filename: str = "report.html"):
+def upload_report(report_path: str, filename: str = "report.html") -> str | None:
     """
     Sube el reporte HTML al Web Service FastAPI (py-algo-web-service)
-    usando el endpoint POST /upload-report.
+    usando el endpoint POST /upload-report. Devuelve la URL pública.
     """
     if not WEB_SERVICE_BASE_URL or not UPLOAD_TOKEN:
-        print(
-            "[WARN] No hay configuración de WEB_SERVICE_BASE_URL o UPLOAD_TOKEN — se omite upload.")
+        print("[WARN] Falta WEB_SERVICE_BASE_URL o UPLOAD_TOKEN — omito upload.")
         return None
 
     url = f"{WEB_SERVICE_BASE_URL}/upload-report"
     headers = {"X-Upload-Token": UPLOAD_TOKEN}
-    files = {"file": (filename, open(report_path, "rb"), "text/html")}
 
     print(f"[INFO] Subiendo reporte a {url} ...")
     try:
-        r = requests.post(url, headers=headers, files=files, timeout=60)
-        r.raise_for_status()
+        with open(report_path, "rb") as fh:
+            files = {"file": (filename, fh, "text/html")}
+            r = requests.post(url, headers=headers, files=files, timeout=60)
+            r.raise_for_status()
+        data = r.json() if r.headers.get("content-type",
+                                         "").startswith("application/json") else {}
+        public_url = data.get(
+            "url") or f"{WEB_SERVICE_BASE_URL}/report/{filename}"
         print("[OK] Reporte subido correctamente ✅")
-        return f"{WEB_SERVICE_BASE_URL}/report/{filename}"
+        return public_url
     except Exception as e:
         print(f"[ERROR] Falló la subida del reporte: {e}")
         return None
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="config.yaml")
-    args = ap.parse_args()
+def run_once(config_path: str = "config.yaml") -> tuple[str, str | None]:
+    """
+    Ejecuta el backtest 1 vez, genera QuantStats HTML en REPORTS_DIR y (si hay config)
+    lo sube al Web Service. Devuelve (report_path_local, public_url|None).
+    """
+    cfg = load_config(config_path)
 
-    cfg = load_config(args.config)
+    # 1) Data pipeline
     csv_auto = auto_fetch_to_csv(cfg)
     df = read_csv(csv_auto, cfg["data"]["datetime_col"], cfg["data"]["tz"])
     df = resample_ohlcv(df, cfg["data"]["timeframe"],
@@ -70,10 +77,9 @@ def main():
     df = add_pct_change(df)
     df = compute_indicators(df, cfg["features"])
     df = compute_signal_scores(df, cfg["signals"]["weights"])
-
-    # Drop NaNs
     df = df.dropna().reset_index(drop=True)
 
+    # 2) Backtrader
     cerebro = bt.Cerebro()
     cerebro.addstrategy(
         IndicatorStrategy,
@@ -90,28 +96,36 @@ def main():
     data = df.copy()
     data.set_index("datetime", inplace=True)
     feed = PandasDataExt(dataname=data)
-
     cerebro.adddata(feed)
     cerebro.broker.setcash(cfg["backtest"]["cash"])
     cerebro.broker.setcommission(commission=cfg["backtest"]["commission"])
 
     cerebro.run()
     value = cerebro.broker.getvalue()
-    print(f"Final Portfolio Value: {value:.2f}")
+    print(f"[INFO] Final Portfolio Value: {value:.2f}")
 
-    # --- Generar el HTML de QuantStats ---
+    # 3) QuantStats → HTML
     Path(REPORTS_DIR).mkdir(parents=True, exist_ok=True)
     report_path = os.path.join(REPORTS_DIR, "report.html")
-
     ret = data["close"].pct_change().fillna(0.0)
     qs.reports.html(ret, output=report_path, title="Strategy Report")
-
     print(f"[OK] Reporte generado en: {report_path}")
 
-    # --- Subir al Web Service ---
-    url = upload_report(report_path)
+    # 4) Upload opcional al Web Service
+    public_url = upload_report(report_path)
+
+    return report_path, public_url
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", default="config.yaml")
+    args = ap.parse_args()
+
+    report_path, url = run_once(args.config)
+    print(f"[DONE] HTML local: {report_path}")
     if url:
-        print(f"[INFO] Reporte público disponible en: {url}")
+        print(f"[DONE] URL pública: {url}")
 
 
 if __name__ == "__main__":
