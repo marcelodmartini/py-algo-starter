@@ -1,7 +1,6 @@
 import argparse
 import os
 from pathlib import Path
-import pandas as pd
 import backtrader as bt
 import quantstats as qs
 import requests
@@ -12,6 +11,7 @@ from .fetch_data import auto_fetch_to_csv
 from .signal_engine import compute_signal_scores
 from .strategy_bt import IndicatorStrategy
 from .env import WEB_SERVICE_BASE_URL, UPLOAD_TOKEN, REPORTS_DIR
+
 
 class PandasDataExt(bt.feeds.PandasData):
     lines = ('score_total',)
@@ -26,26 +26,66 @@ class PandasDataExt(bt.feeds.PandasData):
         ('score_total', 'score_total'),
     )
 
+
 def _upload_report(report_path: str, filename: str = "report.html"):
+    """
+    Sube el HTML al web-service (endpoint /upload-report).
+    Intenta leer data['url'] del JSON de respuesta y,
+    si no existe, hace fallback a /reports/<filename>.
+    """
     if not WEB_SERVICE_BASE_URL or not UPLOAD_TOKEN:
         print("[WARN] No WEB_SERVICE_BASE_URL/UPLOAD_TOKEN — skip upload")
         return None
-    url = f"{WEB_SERVICE_BASE_URL}/upload-report"
+
+    url = f"{WEB_SERVICE_BASE_URL.rstrip('/')}/upload-report"
     headers = {"X-Upload-Token": UPLOAD_TOKEN}
-    files = {"file": (filename, open(report_path, "rb"), "text/html")}
+
     try:
-        r = requests.post(url, headers=headers, files=files, timeout=60)
+        with open(report_path, "rb") as fh:
+            files = {"file": (filename, fh, "text/html")}
+            r = requests.post(url, headers=headers, files=files, timeout=60)
         r.raise_for_status()
-        return f"{WEB_SERVICE_BASE_URL}/reports/{filename}"
+
+        try:
+            data = r.json()
+        except Exception:
+            data = {}
+
+        if isinstance(data, dict):
+            # Soporta ambas variantes del server:
+            # 1) {"filename": "...", "url": "..."}
+            # 2) {"ok": True, "saved": ["/reports/report-....html", "/"]}
+            if data.get("url"):
+                return data["url"]
+            saved = data.get("saved")
+            if isinstance(saved, list) and saved:
+                # primera entrada suele ser el path del histórico
+                first = saved[0]
+                if isinstance(first, str) and first.startswith("/"):
+                    return f"{WEB_SERVICE_BASE_URL.rstrip('/')}{first}"
+
+        # Fallback genérico
+        return f"{WEB_SERVICE_BASE_URL.rstrip('/')}/reports/{filename}"
     except Exception as e:
         print(f"[ERROR] upload failed: {e}")
         return None
 
+
 def run_once(config_path: str = "config.yaml"):
+    """
+    Ejecuta el pipeline completo:
+      - fetch/resample/indicadores/señales
+      - backtest con Backtrader
+      - genera QuantStats HTML en REPORTS_DIR
+      - intenta subir el reporte al web-service
+    Devuelve: (report_path_local, public_url_o_None)
+    """
     cfg = load_config(config_path)
+
     csv_auto = auto_fetch_to_csv(cfg)
     df = read_csv(csv_auto, cfg["data"]["datetime_col"], cfg["data"]["tz"])
-    df = resample_ohlcv(df, cfg["data"]["timeframe"], cfg["data"]["datetime_col"])
+    df = resample_ohlcv(df, cfg["data"]["timeframe"],
+                        cfg["data"]["datetime_col"])
     df = add_pct_change(df)
     df = compute_indicators(df, cfg["features"])
     df = compute_signal_scores(df, cfg["signals"]["weights"])
@@ -71,15 +111,24 @@ def run_once(config_path: str = "config.yaml"):
     cerebro.broker.setcash(cfg["backtest"]["cash"])
     cerebro.broker.setcommission(commission=cfg["backtest"]["commission"])
     cerebro.run()
+
     value = cerebro.broker.getvalue()
     print(f"Final Portfolio Value: {value:.2f}")
 
+    # Generar reporte HTML
     Path(REPORTS_DIR).mkdir(parents=True, exist_ok=True)
-    report_path = os.path.join(REPORTS_DIR, "report.html")
+    filename = "report.html"
+    report_path = os.path.join(REPORTS_DIR, filename)
+
+    # De momento usamos retornos simples de close; si querés PnL real, luego
+    # agregamos Analyzer y construimos la serie de returns de la equity curve.
     ret = data["close"].pct_change().fillna(0.0)
     qs.reports.html(ret, output=report_path, title="Strategy Report")
-    url = _upload_report(report_path, "report.html")
-    return report_path, url
+
+    # Subir al web-service (opcional)
+    public_url = _upload_report(report_path, filename)
+    return report_path, public_url
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -89,6 +138,7 @@ def main():
     print(f"[OK] Report: {path}")
     if url:
         print(f"[OK] Public URL: {url}")
+
 
 if __name__ == "__main__":
     main()
