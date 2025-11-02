@@ -6,6 +6,21 @@ import pandas as pd
 import backtrader as bt
 import quantstats as qs
 import requests
+try:
+    # cuando se importa como paquete
+    from .utils import load_config, read_csv, resample_ohlcv, add_pct_change
+    from .indicators_pack import compute_indicators
+    from .fetch_data import auto_fetch_to_csv
+    from .signal_engine import compute_signal_scores
+    from .strategy_bt import IndicatorStrategy
+except ImportError:
+    # cuando se ejecuta directo (python -m src.py_algo_starter.run_backtest)
+    from utils import load_config, read_csv, resample_ohlcv, add_pct_change
+    from indicators_pack import compute_indicators
+    from fetch_data import auto_fetch_to_csv
+    from signal_engine import compute_signal_scores
+    from strategy_bt import IndicatorStrategy
+
 
 from utils import load_config, read_csv, resample_ohlcv, add_pct_change
 from indicators_pack import compute_indicators

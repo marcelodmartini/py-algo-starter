@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "py-algo-starter"
+version = "0.1.0"
+description = "Starter de backtests + reportes QuantStats con uploader"
+authors = [{ name = "Marcelo Martini" }]
+requires-python = ">=3.11"
+dependencies = []  # las deps se instalan en el proyecto consumidor (web-service o cron)
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["py_algo_starter*"]
