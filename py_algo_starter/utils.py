@@ -1,15 +1,36 @@
+import os
 import pandas as pd
 import yaml
 
+
 def load_config(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+
+    # Override por variable de entorno (opcional)
+    sym = os.getenv("SYMBOL")
+    if sym:
+        cfg.setdefault("data", {})
+        cfg["data"]["symbol"] = sym.strip()
+
+    return cfg
+
 
 def read_csv(path: str, datetime_col: str, tz: str = "UTC") -> pd.DataFrame:
     df = pd.read_csv(path)
     if datetime_col in df.columns:
-        df[datetime_col] = pd.to_datetime(df[datetime_col], utc=True).dt.tz_convert(tz)
+        df[datetime_col] = pd.to_datetime(
+            df[datetime_col], utc=True).dt.tz_convert(tz)
     return df
+
+
+def read_csv(path: str, datetime_col: str, tz: str = "UTC") -> pd.DataFrame:
+    df = pd.read_csv(path)
+    if datetime_col in df.columns:
+        df[datetime_col] = pd.to_datetime(
+            df[datetime_col], utc=True).dt.tz_convert(tz)
+    return df
+
 
 def resample_ohlcv(df, timeframe: str, datetime_col: str):
     df = df.copy()
@@ -22,9 +43,10 @@ def resample_ohlcv(df, timeframe: str, datetime_col: str):
     l = df["low"].resample(rule).min()
     c = df["close"].resample(rule).last()
     v = df["volume"].resample(rule).sum()
-    out = (pd.concat([o,h,l,c,v], axis=1).dropna().reset_index()
+    out = (pd.concat([o, h, l, c, v], axis=1).dropna().reset_index()
            .rename(columns={"index": "datetime"}))
     return out
+
 
 def add_pct_change(df):
     df = df.copy()
