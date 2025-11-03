@@ -1,177 +1,107 @@
+from __future__ import annotations
 import os
-import time
+import math
+from typing import Optional
 import pandas as pd
-import requests
-import yfinance as yf
-from typing import Optional, List
 
-CRYPTO_QUOTES_PRIORITY: List[str] = ["USDT", "USD", "BUSD"]
+try:
+    import yfinance as yf
+except Exception:  # pragma: no cover
+    yf = None
 
 
-def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
-    cols = ["datetime", "open", "high", "low", "close", "volume"]
-    if not set(cols).issubset(df.columns):
-        return pd.DataFrame(columns=cols)
-    out = df[cols].dropna().copy().sort_values("datetime")
-    for c in ["open", "high", "low", "close", "volume"]:
-        out[c] = out[c].astype(float)
+def _looks_like_crypto(symbol: str) -> bool:
+    s = symbol.upper()
+    return ("/" in s) or s.endswith("USDT") or s in {"BTC", "ETH", "SOL", "ADA", "BNB", "XRP", "DOGE", "BTC-USD", "ETH-USD"}
+
+
+def _yf_period_for(interval: str) -> str:
+    it = (interval or "").lower()
+    if it in ("1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"):
+        return "60d"     # máximo intradía en Yahoo
+    if it in ("1d", "1wk"):
+        return "10y"
+    if it in ("1mo", "3mo"):
+        return "20y"
+    return "60d"
+
+
+def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or len(df) == 0:
+        return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
+    df = df.copy()
+    # Asegura datetime
+    if isinstance(df.index, pd.DatetimeIndex):
+        idx = df.index.tz_localize(
+            None) if df.index.tz is not None else df.index
+        df.insert(0, "datetime", idx.to_pydatetime())
+    elif "Date" in df.columns:
+        df = df.rename(columns={"Date": "datetime"})
+    # Normaliza nombres
+    out = pd.DataFrame()
+
+    def pick(name: str):
+        return name if name in df.columns else name.title()
+    cols = {"datetime": "datetime", "open": "open", "high": "high",
+            "low": "low", "close": "close", "adj close": "close", "volume": "volume"}
+    for src, dst in cols.items():
+        key = pick(src)
+        if key in df.columns:
+            out[dst] = df[key].values
+    out = out.dropna().drop_duplicates(
+        subset=["datetime"]).sort_values("datetime")
     return out
 
 
-def _is_probably_crypto(symbol: str) -> bool:
-    s = symbol.strip().upper()
-    if "/" in s:
-        return True
-    return s.isalpha() and (3 <= len(s) <= 5)
-
-
-def _yahoo_candidates(symbol: str) -> List[str]:
-    s = symbol.strip().upper()
-    if "/" in s:
-        base = s.split("/")[0]
-        return [f"{base}-USD"]
-    if "-" in s:
-        return [s]
-    if _is_probably_crypto(s):
-        return [f"{s}-USD", s]
-    return [s]
-
-
-def _binance_candidates(symbol: str) -> List[str]:
-    s = symbol.strip().upper()
-    if "/" in s:
-        return [s]
-    if _is_probably_crypto(s):
-        return [f"{s}/{q}" for q in CRYPTO_QUOTES_PRIORITY]
-    return []
-
-
-def fetch_yahoo(symbol: str, start: Optional[str] = None, end: Optional[str] = None,
-                interval: str = "1h") -> pd.DataFrame:
-    kwargs = {}
-    if start:
-        kwargs["start"] = pd.to_datetime(start)
-    if end:
-        kwargs["end"] = pd.to_datetime(end)
-
-    print(f"[YF] Downloading {symbol} (interval={interval})...")
-    df = yf.download(symbol, interval=interval, progress=False, **kwargs)
-    if df is None or df.empty:
-        print(f"[YF] Empty for {symbol}")
-        return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
-
-    rename = {}
-    if "Date" in df.columns:
-        rename["Date"] = "datetime"
-    if "Datetime" in df.columns:
-        rename["Datetime"] = "datetime"
-    for k in ("Open", "High", "Low", "Close", "Volume"):
-        if k in df.columns:
-            rename[k] = k.lower()
-    df = df.rename(columns=rename).reset_index()
-
-    if "datetime" not in df.columns:
-        return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
-
-    out = df[["datetime", "open", "high", "low", "close", "volume"]]
-    print(f"[YF] Got {len(out)} rows for {symbol}")
-    return _normalize_ohlcv(out)
-
-
-def fetch_binance(symbol: str, timeframe: str = "1h", start: Optional[str] = None,
-                  limit: int = 1000) -> pd.DataFrame:
-    endpoint = "https://api.binance.com/api/v3/klines"
-    interval = timeframe.lower()
-    df_list = []
-    start_ts = int(pd.Timestamp(start, tz="UTC").timestamp()
-                   * 1000) if start else None
-    symbol_noslash = symbol.replace("/", "").upper()
-
-    while True:
-        params = {"symbol": symbol_noslash,
-                  "interval": interval, "limit": int(limit)}
-        if start_ts:
-            params["startTime"] = start_ts
-        r = requests.get(endpoint, params=params, timeout=15)
-        if r.status_code != 200:
-            print(
-                f"[BINANCE] API error {r.status_code} for {symbol_noslash}: {r.text}")
-            return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
-        data = r.json()
-        if not data:
-            break
-
-        frame = pd.DataFrame(data, columns=[
-            "open_time", "open", "high", "low", "close", "volume",
-            "close_time", "quote_asset_volume", "num_trades",
-            "taker_base_vol", "taker_quote_vol", "ignore",
-        ])
-        frame["datetime"] = pd.to_datetime(
-            frame["open_time"], unit="ms", utc=True)
-        frame = frame[["datetime", "open", "high",
-                       "low", "close", "volume"]].astype(float)
-        df_list.append(frame)
-
-        if len(data) < limit:
-            break
-        start_ts = data[-1][6]
-        time.sleep(0.25)
-
-    if not df_list:
-        return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
-    df = pd.concat(df_list, ignore_index=True)
-    print(f"[BINANCE] Got {len(df)} rows for {symbol_noslash}")
-    return _normalize_ohlcv(df)
+def fetch_yahoo(symbol: str, interval: str, start: Optional[str] = None, end: Optional[str] = None, **kwargs) -> pd.DataFrame:
+    if yf is None:
+        return pd.DataFrame()
+    period = kwargs.get("period") or _yf_period_for(interval)
+    try:
+        df = yf.download(symbol, interval=interval, period=period,
+                         auto_adjust=True, prepost=False, progress=False, threads=False)
+    except Exception:
+        df = pd.DataFrame()
+    return _normalize_df(df)
 
 
 def auto_fetch_to_csv(cfg: dict) -> str:
     """
-    1) Prueba Yahoo con candidatos (equity/ETF/cripto tipo BTC-USD).
-    2) Si vacío y parece cripto → prueba Binance (/USDT → /USD → /BUSD).
-    3) Guarda CSV y retorna el path. Si todo falla, crea dummy para no romper.
+    Resuelve fuente y escribe CSV en cfg['data']['csv_path'].
     """
-    csv_path = cfg["data"]["csv_path"]
+    data_cfg = cfg.get("data", {})
+    csv_path = data_cfg.get("csv_path", "data/out.csv")
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
 
-    symbol = str(cfg["data"].get("symbol", "SPY")).strip()
-    interval = str(cfg["data"].get("interval", "1h")).lower()    # Yahoo
-    timeframe = str(cfg["data"].get("timeframe", "1h")).lower()   # Binance
-    start = cfg["data"].get("start")
-    end = cfg["data"].get("end")
-    limit = int(cfg["data"].get("limit", 5000))
+    symbol = (data_cfg.get("symbol") or data_cfg.get("ticker") or "").strip()
+    interval = (data_cfg.get("interval") or data_cfg.get(
+        "timeframe") or "1d").lower()
 
-    print(
-        f"[AUTO] symbol={symbol} interval(YF)={interval} timeframe(BIN)={timeframe}")
+    # Acciones/ETFs -> Yahoo
+    # Cripto -> Yahoo BASE-USD; Binance se evita (Render bloquea 451)
+    prefer_yahoo = True
+    yf_symbol = symbol
 
-    for yc in _yahoo_candidates(symbol):
-        try:
-            df_y = fetch_yahoo(yc, start=start, end=end, interval=interval)
-            if not df_y.empty:
-                df_y.to_csv(csv_path, index=False)
-                print(
-                    f"[AUTO] Yahoo OK → {yc} (rows={len(df_y)}) → {csv_path}")
-                return csv_path
-        except Exception as e:
-            print(f"[AUTO] Yahoo candidate {yc} failed: {e}")
+    if _looks_like_crypto(symbol):
+        base = symbol.split(
+            "/")[0] if "/" in symbol else symbol.replace("USDT", "").replace("-USD", "")
+        yf_symbol = f"{base}-USD"
+    else:
+        yf_symbol = symbol  # AAPL, SPY, etc.
 
-    if _is_probably_crypto(symbol):
-        for bc in _binance_candidates(symbol):
-            try:
-                df_b = fetch_binance(
-                    bc, timeframe=timeframe, start=start, limit=limit)
-                if not df_b.empty:
-                    df_b.to_csv(csv_path, index=False)
-                    print(
-                        f"[AUTO] Binance OK → {bc} (rows={len(df_b)}) → {csv_path}")
-                    return csv_path
-            except Exception as e:
-                print(f"[AUTO] Binance candidate {bc} failed: {e}")
+    df = fetch_yahoo(yf_symbol, interval=interval)
 
-    if not os.path.exists(csv_path):
-        dummy = pd.DataFrame({
-            "datetime": pd.date_range("2024-01-01", periods=200, freq="H", tz="UTC"),
-            "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 1000
-        })
-        dummy.to_csv(csv_path, index=False)
-        print(f"[AUTO] WARNING: no data; created dummy {csv_path}")
+    # Si cripto -USD falló, probá con BASE "cruda"
+    if (df is None or df.empty) and _looks_like_crypto(symbol):
+        base = symbol.split(
+            "/")[0] if "/" in symbol else symbol.replace("USDT", "").replace("-USD", "")
+        df = fetch_yahoo(base, interval=interval)
+
+    # Fallback mínimo para que no explote el pipeline
+    if df is None or df.empty:
+        rng = pd.date_range("2024-01-01", periods=2, freq="D")
+        df = pd.DataFrame({"datetime": rng, "open": [1.0, 1.0], "high": [
+                          1.0, 1.0], "low": [1.0, 1.0], "close": [1.0, 1.0], "volume": [0, 0]})
+
+    df.to_csv(csv_path, index=False)
     return csv_path
