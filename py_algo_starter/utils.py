@@ -3,10 +3,7 @@ import pandas as pd
 
 
 def resample_ohlcv(df: pd.DataFrame, rule: str) -> pd.DataFrame:
-    """
-    Resample OHLCV usando alias actuales de pandas (minúscula).
-    Acepta '1h', '4h', '1d'.
-    """
+    """Resample OHLCV con alias válidos ('1h', '4h', '1d')."""
     if df is None or df.empty:
         return df
     if not isinstance(df.index, pd.DatetimeIndex):

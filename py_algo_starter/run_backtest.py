@@ -2,162 +2,108 @@ from __future__ import annotations
 import os
 import pandas as pd
 import numpy as np
-
-# Evita warnings de fuentes en Matplotlib
-try:
-    import matplotlib as mpl
-    mpl.rcParams["font.family"] = "DejaVu Sans"
-except Exception:
-    pass
-
 import quantstats as qs
-
 from .fetch_data import auto_fetch_to_csv
 from .strategy_bt import run_bt
 from .env import UploadClient
 
+# Fuente limpia
+import matplotlib as mpl
+mpl.rcParams["font.family"] = "DejaVu Sans"
 
-def _ema(s: pd.Series, n: int) -> pd.Series:
-    return s.ewm(span=n, adjust=False).mean()
-
-
-def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    delta = series.diff()
-    up = delta.clip(lower=0).ewm(alpha=1/period, adjust=False).mean()
-    down = (-delta.clip(upper=0)).ewm(alpha=1/period, adjust=False).mean()
-    rs = up / down.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
+# === Indicadores ===
 
 
-def _macd(series: pd.Series, fast=12, slow=26, signal=9):
-    ema_fast = _ema(series, fast)
-    ema_slow = _ema(series, slow)
-    macd = ema_fast - ema_slow
-    sig = _ema(macd, signal)
-    hist = macd - sig
-    return macd, sig, hist
+def ema(s, n): return s.ewm(span=n, adjust=False).mean()
 
 
-HTML_HEADER = """
-<div style="border:2px solid #0a84ff;padding:12px;border-radius:10px;background:#f5f9ff;margin:8px 0 18px 0">
-  <h2 style="margin:0 0 6px 0;color:#0a84ff">📌 Trade Conclusion</h2>
-  <div style="font-size:14px;line-height:1.5">{body}</div>
-</div>
-"""
+def rsi(s, n=14):
+    delta = s.diff()
+    up, down = delta.clip(lower=0), -delta.clip(upper=0)
+    rs = up.ewm(alpha=1/n).mean() / down.ewm(alpha=1/n).mean()
+    return 100 - 100/(1+rs)
 
 
-def _ensure_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    if "ema20" not in df.columns:
-        df["ema20"] = _ema(df["close"], 20)
-    if "ema50" not in df.columns:
-        df["ema50"] = _ema(df["close"], 50)
-    if "rsi14" not in df.columns and "rsi" not in df.columns:
-        df["rsi14"] = _rsi(df["close"], 14)
-    elif "rsi" in df.columns and "rsi14" not in df.columns:
-        df["rsi14"] = df["rsi"]
-    macd, sig, hist = _macd(df["close"])
-    df["macd"] = macd
-    df["macd_signal"] = sig
-    df["macd_hist"] = hist
-    return df
+def macd(s, fast=12, slow=26, signal=9):
+    m = ema(s, fast) - ema(s, slow)
+    sline = ema(m, signal)
+    return m, sline, m-sline
+
+# === Inserción HTML ===
 
 
-def _entry_exit_suggestion(df: pd.DataFrame) -> dict:
-    last = df.iloc[-1]
-    cond_long = (last.get("close", np.nan) > last.get("ema50", np.nan)) and (
-        last.get("rsi14", 0) > 50) and (last.get("macd", 0) > 0)
-    cond_exit = (last.get("close", np.nan) < last.get(
-        "ema50", np.nan)) or (last.get("rsi14", 100) < 45)
-
-    entry_price = float(last.get("ema20", np.nan))
-    alt_now = float(last.get("close", np.nan))
-    exit_price = float(last.get("ema50", np.nan))
-
-    def r(x):
-        if not np.isfinite(x):
-            return None
-        return float(np.round(x, 2 if x >= 10 else 4))
-
-    return {
-        "bias": "LONG" if cond_long and not cond_exit else ("EXIT/NEUTRAL" if cond_exit else "NEUTRAL"),
-        "entry_price": r(entry_price),
-        "entry_now": r(alt_now),
-        "exit_price": r(exit_price)
-    }
+def color_emoji(v): return "🟢" if v == "LONG" else (
+    "🔴" if v == "EXIT" else "🟡")
 
 
-def inject_conclusion(report_html: str, advice: dict, symbol: str) -> str:
-    if not advice:
-        return report_html
-    bias = advice["bias"]
-    parts = []
-    if bias == "LONG":
-        parts.append(
-            f"<b>Señal:</b> <span style='color:#0a0'>Comprar (tendencia alcista)</span> en <b>{symbol}</b>.")
-        if advice["entry_price"]:
-            parts.append(
-                f"<b>Entrada sugerida:</b> zona de retroceso ≈ <code>{advice['entry_price']}</code> (EMA20). Alternativa: <code>{advice['entry_now']}</code> con confirmación.")
-        else:
-            parts.append(f"<b>Entrada sugerida:</b> {advice['entry_now']}.")
-        parts.append(
-            f"<b>Salida/Stop dinámico:</b> cierre bajo EMA50 ≈ <code>{advice['exit_price']}</code>.")
-    elif bias == "EXIT/NEUTRAL":
-        parts.append(
-            f"<b>Señal:</b> <span style='color:#a00'>Salir / Neutral</span> en <b>{symbol}</b> (cierre bajo EMA50 o RSI&lt;45).")
-        parts.append(
-            f"<b>Salida sugerida:</b> próximo cierre bajo EMA50 ≈ <code>{advice['exit_price']}</code>.")
-        parts.append(
-            f"<b>Re-entrada:</b> sobre EMA50 recuperada + RSI&gt;50; ideal pullback a EMA20 ≈ <code>{advice['entry_price']}</code>.")
+def inject_conclusion(html, bias, ep, enow, ex, table_html, symbol):
+    box = f"""
+<div style="border:2px solid #0a84ff;padding:10px;border-radius:10px;background:#f7faff;margin-bottom:12px">
+<h2 style="color:#0a84ff;margin:0 0 6px 0">📊 Trade Conclusion - {symbol}</h2>
+<p><b>Señal:</b> {color_emoji(bias)} {bias}</p>
+<p><b>Entrada:</b> {ep or '-'} | <b>Actual:</b> {enow or '-'} | <b>Salida/Stop:</b> {ex or '-'}</p>
+{table_html}
+</div>"""
+    if "<body" in html:
+        i = html.find(">", html.find("<body"))
+        html = html[:i+1] + box + html[i+1:]
     else:
-        parts.append(
-            f"<b>Señal:</b> Neutral en <b>{symbol}</b>. Esperar cruce alcista EMA50 con RSI&gt;50 y MACD&gt;0.")
-        parts.append(
-            f"<b>Niveles guía:</b> Entrada ≈ EMA20 <code>{advice['entry_price']}</code>, Stop: EMA50 <code>{advice['exit_price']}</code>.")
+        html = box + html
+    return html
 
-    box = HTML_HEADER.format(body="<br/>".join(parts))
-    if "<body" in report_html:
-        i = report_html.find(">", report_html.find("<body"))
-        if i != -1:
-            return report_html[:i+1] + box + report_html[i+1:]
-    return box + report_html
+# === Pipeline ===
 
 
-def run_once(symbol: str, cfg: dict, out_html: str, upload: bool = True) -> str:
-    # 1) Fetch
+def run_once(symbol, cfg, out_html, upload=True):
     csv = auto_fetch_to_csv(cfg)
-
-    # 2) Data + indicadores
     df = pd.read_csv(csv, parse_dates=["datetime"]).sort_values("datetime")
-    df = _ensure_indicators(df)
+    if len(df) < 30:
+        return out_html
 
-    # 3) Returns para Quantstats
-    try:
-        ret, stats = run_bt(df)
-        if ret is None or len(ret) == 0:
-            ret = df.set_index("datetime")["close"].pct_change().fillna(0.0)
-    except Exception:
-        ret = df.set_index("datetime")["close"].pct_change().fillna(0.0)
+    df["ema20"] = ema(df["close"], 20)
+    df["ema50"] = ema(df["close"], 50)
+    df["rsi14"] = rsi(df["close"], 14)
+    df["macd"], df["macd_signal"], df["macd_hist"] = macd(df["close"])
 
-    # 4) Reporte
+    last = df.iloc[-1]
+    cond_long = (last.close > last.ema50) and (
+        last.rsi14 > 50) and (last.macd > 0)
+    cond_exit = (last.close < last.ema50) or (last.rsi14 < 45)
+    bias = "LONG" if cond_long else ("EXIT" if cond_exit else "NEUTRAL")
+
+    ep = round(last.ema20, 2)
+    ex = round(last.ema50, 2)
+    enow = round(last.close, 2)
+
+    ret = df.set_index("datetime")["close"].pct_change().fillna(0)
     qs.extend_pandas()
-    report_path = out_html
-    qs.reports.html(ret, output=report_path,
-                    title=f"Strategy Report - {symbol}")
+    qs.reports.html(ret, output=out_html, title=f"{symbol} Backtest Report")
 
-    # 5) Conclusión de trade
-    with open(report_path, "r", encoding="utf-8") as f:
+    # === Tabla semáforo ===
+    recent = df.tail(
+        10)[["datetime", "close", "ema20", "ema50", "rsi14", "macd"]]
+    rows = ""
+    for _, r in recent.iterrows():
+        sig = "🟢" if (r.close > r.ema50 and r.rsi14 > 50) else (
+            "🔴" if r.close < r.ema50 else "🟡")
+        rows += f"<tr><td>{r.datetime.strftime('%Y-%m-%d')}</td><td>{r.close:.2f}</td><td>{r.ema20:.2f}</td><td>{r.ema50:.2f}</td><td>{r.rsi14:.1f}</td><td>{r.macd:.2f}</td><td>{sig}</td></tr>"
+    table_html = f"""
+<table border='1' cellspacing='0' cellpadding='4' style='border-collapse:collapse;font-size:12px;margin-top:8px'>
+<tr style='background:#e0e7ff'><th>Fecha</th><th>Cierre</th><th>EMA20</th><th>EMA50</th><th>RSI</th><th>MACD</th><th>Señal</th></tr>
+{rows}</table>"""
+
+    # === Inserta la conclusión arriba del reporte ===
+    with open(out_html, "r", encoding="utf-8") as f:
         html = f.read()
-    advice = _entry_exit_suggestion(df)
-    html2 = inject_conclusion(html, advice, symbol)
-    with open(report_path, "w", encoding="utf-8") as f:
-        f.write(html2)
+    html = inject_conclusion(html, bias, ep, enow, ex, table_html, symbol)
+    with open(out_html, "w", encoding="utf-8") as f:
+        f.write(html)
 
-    # 6) Upload
     if upload:
         try:
             client = UploadClient.from_env()
-            client.upload_report(report_path)
+            client.upload_report(out_html)
         except Exception:
             pass
-    return report_path
+
+    return out_html
