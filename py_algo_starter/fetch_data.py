@@ -1,115 +1,69 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-import os
 import pandas as pd
-
+import datetime as dt
 try:
     import yfinance as yf
 except Exception:
     yf = None
 
+from .symbols import is_crypto_symbol, normalize_for_yahoo, normalize_for_exchange
 
-def _looks_like_crypto(symbol: str) -> bool:
-    s = symbol.upper()
-    return (
-        ("/" in s)
-        or s.endswith("USDT")
-        or s in {"BTC", "ETH", "SOL", "ADA", "BNB", "XRP", "DOGE", "BTC-USD", "ETH-USD"}
+# Config por defecto para YF en 1h: usar period si no hay start/end
+_DEFAULT_PERIOD_BY_INTERVAL = {
+    "1h": "60d",
+    "30m": "30d",
+    "15m": "30d",
+    "1d": "3y",
+}
+
+
+def _yf_download(ticker: str, interval: str, start=None, end=None, period=None) -> pd.DataFrame:
+    kwargs = dict(
+        interval=interval,
+        progress=False,
+        auto_adjust=False,  # consistente con OHLC para pivots/EMA
     )
-
-
-def _yf_period_for(interval: str) -> str:
-    it = (interval or "").lower()
-    if it in ("1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"):
-        return "60d"  # máximo intradía en Yahoo
-    if it in ("1d", "1wk"):
-        return "10y"
-    if it in ("1mo", "3mo"):
-        return "20y"
-    return "60d"
-
-
-def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or len(df) == 0:
-        return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
-    df = df.copy()
-    if isinstance(df.index, pd.DatetimeIndex):
-        idx = df.index.tz_localize(
-            None) if df.index.tz is not None else df.index
-        df.insert(0, "datetime", idx.to_pydatetime())
-    elif "Date" in df.columns:
-        df = df.rename(columns={"Date": "datetime"})
-    out = pd.DataFrame()
-    cols = {
-        "datetime": "datetime",
-        "open": "open",
-        "high": "high",
-        "low": "low",
-        "close": "close",
-        "adj close": "close",
-        "volume": "volume",
-    }
-    for src, dst in cols.items():
-        if src in df.columns:
-            out[dst] = df[src].values
-        elif src.title() in df.columns:
-            out[dst] = df[src.title()].values
-    out = out.dropna().drop_duplicates(
-        subset=["datetime"]).sort_values("datetime")
-    return out
-
-
-def fetch_yahoo(symbol: str, interval: str) -> pd.DataFrame:
-    if yf is None:
-        return pd.DataFrame()
-    period = _yf_period_for(interval)
-    try:
-        df = yf.download(
-            symbol,
-            interval=interval,
-            period=period,
-            auto_adjust=True,
-            prepost=False,
-            progress=False,
-            threads=False,
-        )
-    except Exception:
-        df = pd.DataFrame()
-    return _normalize_df(df)
-
-
-def auto_fetch_to_csv(cfg: dict) -> str:
-    data_cfg = cfg.get("data", {})
-    csv_path = data_cfg.get("csv_path", "data/out.csv")
-    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-    symbol = (data_cfg.get("symbol") or data_cfg.get("ticker") or "").strip()
-    interval = (data_cfg.get("interval") or data_cfg.get(
-        "timeframe") or "1d").lower()
-
-    if _looks_like_crypto(symbol):
-        base = symbol.split(
-            "/")[0] if "/" in symbol else symbol.replace("USDT", "").replace("-USD", "")
-        yf_symbol = f"{base}-USD"
-    else:
-        yf_symbol = symbol  # acciones/ETFs
-
-    df = fetch_yahoo(yf_symbol, interval=interval)
-    if (df is None or df.empty) and _looks_like_crypto(symbol):
-        base = symbol.split(
-            "/")[0] if "/" in symbol else symbol.replace("USDT", "").replace("-USD", "")
-        df = fetch_yahoo(base, interval=interval)
-
+    if start and not period:
+        kwargs["start"] = start
+    if end:
+        kwargs["end"] = end
+    if period and not start:
+        kwargs["period"] = period
+    df = yf.download(ticker, **kwargs)
     if df is None or df.empty:
-        rng = pd.date_range("2024-01-01", periods=2, freq="D")
-        df = pd.DataFrame(
-            {
-                "datetime": rng,
-                "open": [1.0, 1.0],
-                "high": [1.0, 1.0],
-                "low": [1.0, 1.0],
-                "close": [1.0, 1.0],
-                "volume": [0, 0],
-            }
-        )
+        return pd.DataFrame()
+    df = df.rename(columns=str.lower)
+    df.index = pd.to_datetime(df.index)
+    # YF algunos símbolos traen 'adj close'; conservar 'close'
+    return df[["open", "high", "low", "close", "volume"]].dropna(how="any")
 
-    df.to_csv(csv_path, index=False)
-    return csv_path
+
+def fetch_ohlcv(symbol: str, interval: str = "1h", start: str | None = None, end: str | None = None) -> pd.DataFrame:
+    """
+    Retorna OHLCV con index datetime.
+    - Para EQUITY/ETF => Yahoo (AAPL, SPY)
+    - Para CRYPTO => Yahoo (BTC-USD/ETH-USD) por ahora. (Evitar Binance 451)
+    """
+    if yf is None:
+        raise RuntimeError("yfinance no está instalado en el entorno")
+
+    # Normalizar para Yahoo
+    yf_symbol = normalize_for_yahoo(symbol)
+
+    # Elegir period por defecto si no pasás start
+    period = None
+    if start is None:
+        period = _DEFAULT_PERIOD_BY_INTERVAL.get(interval, None)
+
+    df = _yf_download(yf_symbol, interval=interval,
+                      start=start, end=end, period=period)
+
+    return df
+
+
+def fetch_and_validate(symbol: str, interval: str = "1h", start: str | None = None, end: str | None = None) -> pd.DataFrame:
+    df = fetch_ohlcv(symbol, interval=interval, start=start, end=end)
+    # filtrar duplicados y asegurar sort
+    df = df[~df.index.duplicated(keep="last")].sort_index()
+    return df
